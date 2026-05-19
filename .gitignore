@@ -1,0 +1,15 @@
+# Generated output files
+job_matches.csv
+job_cache.json
+job_search.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

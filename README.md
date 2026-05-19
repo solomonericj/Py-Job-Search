@@ -1,6 +1,6 @@
-# LinkedIn Job Match Finder
+# Job Match Finder v2
 
-A self-contained Python script that **scrapes job postings from LinkedIn, Indeed, and ZipRecruiter** and automatically **scores each posting** against your skill/keyword profile — so the best matches bubble to the top.
+Scrapes job postings from LinkedIn, Indeed, ZipRecruiter, Glassdoor, and Google via **python-jobspy**, then scores each posting against your skill profile. v2 adds fuzzy matching, caching, SQLite tracking, parallel fetching, email notifications, and more.
 
 ---
 
@@ -8,95 +8,136 @@ A self-contained Python script that **scrapes job postings from LinkedIn, Indeed
 
 ### 1. Install dependencies
 ```bash
-pip install python-jobspy pandas tabulate
-# Python >= 3.10 required
+pip install -r requirements.txt
+
+# Optional (recommended for faster fuzzy matching):
+pip install rapidfuzz
 ```
 
-### 2. Run
+### 2. Edit your profile
+Open **`config.yaml`** and set your location, search terms, and skills.
+
+### 3. Run
 ```bash
 python job_match_finder.py
+
+# Quick test (10 results, bypass cache):
+python job_match_finder.py --limit 10 --no-cache
+
+# Debug logging:
+python job_match_finder.py --verbose
+
+# Clear cached results:
+python job_match_finder.py --clear-cache
 ```
 
-### 3. View results
+### 4. View results
 - Top 10 matches are printed to the terminal.
-- All results are exported to **`job_matches.csv`** (sortable in Excel / Pandas).
+- All results exported to **`job_matches.csv`** (with a `status` column you can edit to track applications).
+- Jobs are persisted in **`job_search.db`** (SQLite) — status survives across runs.
 
 ---
 
-## How It Works
+## What's New in v2
 
+| Feature | Description |
+|---------|-------------|
+| **External config** | `config.yaml` — edit your profile without touching code |
+| **Fuzzy matching** | Catches near-miss keywords (e.g. "analytics" ≈ "analytical"). Uses `rapidfuzz` if installed, falls back to `difflib`. |
+| **Title bonus** | Keywords found in the job title score extra points |
+| **Salary boost** | Jobs above a salary threshold get a % score bump |
+| **Remote boost** | Remote/hybrid jobs get a % score bump |
+| **Parallel fetching** | Search terms are fetched concurrently via `ThreadPoolExecutor` |
+| **Caching** | Results cached for 30 min (configurable) so re-runs are instant |
+| **Retry logic** | Automatic retry with backoff on network errors |
+| **SQLite database** | Tracks status (`new` → `saved` → `applied` → `rejected`), preserves across runs |
+| **Email notifications** | Get alerted when high-scoring jobs appear |
+| **CLI flags** | `--limit`, `--no-cache`, `--no-db`, `--no-notify`, `--verbose`, `--clear-cache` |
+| **Logging** | Structured `logging` output instead of bare `print()` |
+| **Company normalizer** | Deduplicates "Acme Inc." and "Acme" |
+| **`.gitignore`** | Excludes generated CSVs, cache, and DB files |
+
+---
+
+## Configuration (`config.yaml`)
+
+```yaml
+profile:
+  location: "Nashville, TN"
+  search_terms:
+    - "Data Analytics"
+    - "Director Analytics"
+  skills:
+    tier1: ["python", "sql", "tableau", ...]   # 3 pts each
+    tier2: ["snowflake", "power bi", ...]       # 2 pts each
+    tier3: ["data modeling", ...]               # 1 pt each
+
+scoring:
+  title_bonus_per_match: 3       # extra % points per title keyword match
+  salary_boost:
+    enabled: true
+    annual_threshold: 80000      # boost applies above this
+    boost_pct: 10                # e.g. 80% → 88%
+  remote_boost_pct: 5            # boost for remote jobs
+  fuzzy:
+    enabled: true
+    threshold: 80                # 0-100 similarity threshold
+
+notifications:
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    sender_email: "your@email.com"
+    recipient_email: "your@email.com"
+    min_score: 70                # only notify for matches ≥ 70%
+    # Password goes in SMTP_PASSWORD env var (never in config!)
 ```
-Search Terms × Job Boards
-        │
-        ▼
-  python-jobspy ──► LinkedIn, Indeed, ZipRecruiter  (concurrent)
-        │
-        ▼
-  Deduplicate by job_url
-        │
-        ▼
-  Keyword Scorer
-    tier1 keywords × 3 pts  (Python, PySpark, Spark, SQL, ETL …)
-    tier2 keywords × 2 pts  (Java, Kafka, Airflow, AWS, Azure …)
-    tier3 keywords × 1 pt   (Kubernetes, Terraform, dbt …)
-        │
-        ▼
-  match_score_pct = raw_score / max_possible × 100
-        │
-        ▼
-  Sort descending → export job_matches.csv
+
+---
+
+## Output
+
+### `job_matches.csv`
+All columns from v1 plus **`status`** (new / saved / applied / rejected — edit in any spreadsheet).
+
+### `job_search.db`
+SQLite database persists every job you've ever seen. Edit the `status` column directly:
+```sql
+UPDATE jobs SET status = 'applied' WHERE job_url = '...';
 ```
 
----
-
-## Customising Your Profile
-
-Edit the `PROFILE` dict at the top of `job_match_finder.py`:
-
-| Key | What to change |
-|-----|---------------|
-| `location` | Your city/state (e.g. `"Nashville, TN"`) |
-| `distance_miles` | Search radius |
-| `search_terms` | Job titles you want to match |
-| `skills.tier1/2/3` | Keywords ranked by importance to you |
-| `hours_old` | Only show jobs posted in the last N hours |
-| `results_wanted` | How many results to fetch per site |
-| `sites` | Which boards to query (linkedin, indeed, zip_recruiter, glassdoor, google) |
+### `job_cache.json`
+Cached API responses so re-runs don't hit the boards. Delete or use `--no-cache` to bypass.
 
 ---
 
-## Output Columns (`job_matches.csv`)
+## Email Notifications
 
-| Column | Description |
-|--------|-------------|
-| `site` | Source job board |
-| `title` | Job title |
-| `company` | Employer |
-| `city` / `state` | Location |
-| `match_score_pct` | Your % match (0–100) |
-| `keyword_count` | Number of matching skills found |
-| `matched_keywords` | Comma-separated list of matching skills |
-| `min_amount` / `max_amount` | Salary range (when available) |
-| `is_remote` | Remote flag |
-| `job_url` | Direct link to the posting |
-| `description` | Full job description (use for deeper NLP later) |
+1. Set `notifications.email.enabled: true` in `config.yaml`
+2. Set your SMTP password as an environment variable (never in config):
+   ```bash
+   # Windows (PowerShell)
+   $env:SMTP_PASSWORD = "your-app-password"
+   
+   # macOS / Linux
+   export SMTP_PASSWORD="your-app-password"
+   ```
+3. For Gmail, use an [App Password](https://support.google.com/accounts/answer/185833).
 
 ---
 
 ## Notes & Limitations
 
-- **LinkedIn rate-limits** aggressive scrapers (~10 pages per IP). If you hit 429 errors,
-  add the `proxies` parameter or wait ~1 hour between runs.
-- The `linkedin_fetch_description=True` flag fetches full descriptions (more accurate scoring)
-  but makes one extra HTTP request per LinkedIn posting.
-- All data is **public** (unauthenticated), so LinkedIn login is not required.
-- To avoid blocking, don't run more than once every 30–60 minutes against the same board.
+- **LinkedIn rate-limits** aggressive scrapers (~10 pages per IP). Cache helps — you only fetch each term once per TTL.
+- The `linkedin_fetch_description=True` flag fetches full descriptions (better scoring) but makes one extra HTTP request per LinkedIn posting.
+- All data is **public** (unauthenticated), no login required.
+- Don't run more than once every 30–60 minutes against the same board.
 
 ---
 
-## Extending the Script
+## Extending
 
-**Add NLP scoring (OpenAI):**
+**Add AI scoring:**
 ```python
 import openai
 def ai_score(description, profile_summary):
@@ -110,13 +151,12 @@ def ai_score(description, profile_summary):
     return int(resp.choices[0].message.content.strip())
 ```
 
-**Schedule daily runs (cron):**
+**Schedule daily (cron):**
 ```bash
-# runs every morning at 8 AM
 0 8 * * * /usr/bin/python3 /path/to/job_match_finder.py >> ~/job_scraper.log 2>&1
 ```
 
-**Filter only high matches in Pandas:**
+**Filter high matches:**
 ```python
 import pandas as pd
 df = pd.read_csv("job_matches.csv")

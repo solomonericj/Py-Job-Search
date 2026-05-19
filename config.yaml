@@ -1,0 +1,75 @@
+# ── Job Match Finder Configuration ──────────────────────────────────────────
+# Edit this file to customize your search profile and scoring preferences.
+# The script reads this file on every run.
+
+profile:
+  name: "Data Engineer – Nashville"
+  location: "Nashville, TN"
+  distance_miles: 50
+  search_terms:
+    - "Data Analytics"
+    - "Director Analytics"
+    - "Business Intelligence"
+    - "Insights"
+  skills:
+    tier1:
+      - "python"
+      - "sql"
+      - "tableau"
+      - "Analytics"
+      - "etl"
+      - "data pipeline"
+      - "data governance"
+    tier2:
+      - "sox"
+      - "gcp"
+      - "power bi"
+      - "leadership"
+      - "mentoring"
+      - "snowflake"
+      - "data warehouse"
+    tier3:
+      - "data engineering"
+      - "data modeling"
+      - "data architecture"
+      - "cloud data"
+  job_type: "fulltime"
+  hours_old: 168
+  results_wanted: 25
+  sites:
+    - "linkedin"
+    - "indeed"
+    - "zip_recruiter"
+    - "glassdoor"
+    - "google"
+
+scoring:
+  tier_weights:
+    tier1: 3
+    tier2: 2
+    tier3: 1
+  title_bonus_per_match: 3
+  salary_boost:
+    enabled: true
+    annual_threshold: 80000
+    boost_pct: 10
+  remote_boost_pct: 5
+  fuzzy:
+    enabled: true
+    threshold: 80
+
+notifications:
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    sender_email: ""
+    recipient_email: ""
+    min_score: 70
+
+cache:
+  enabled: true
+  ttl_minutes: 30
+
+database:
+  enabled: true
