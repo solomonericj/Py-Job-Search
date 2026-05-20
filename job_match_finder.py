@@ -28,12 +28,14 @@ import sys
 import textwrap
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Optional Dependencies (graceful degradation)
@@ -106,7 +108,7 @@ DEFAULT_PROFILE: dict[str, Any] = {
     "job_type": "fulltime",
     "hours_old": 168,
     "results_wanted": 25,
-    "sites": ["linkedin", "indeed", "zip_recruiter", "glassdoor", "google"],
+    "sites": ["linkedin", "indeed", "google"],
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -230,8 +232,14 @@ class JobCache:
         if self._dirty:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.cache_path, "w") as f:
-                json.dump(self._data, f, indent=2)
+                json.dump(self._data, f, indent=2, default=self._json_fallback)
             self._dirty = False
+
+    @staticmethod
+    def _json_fallback(o: Any) -> str:
+        if isinstance(o, (datetime, date)):
+            return o.isoformat()
+        raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
 
     @staticmethod
     def _make_key(search_term: str, location: str, hours_old: int, sites: list[str]) -> str:
@@ -343,6 +351,10 @@ class JobDatabase:
             )
             return existing["status"]
 
+        date_posted = job_data.get("date_posted")
+        if isinstance(date_posted, (date, datetime)):
+            date_posted = date_posted.isoformat()
+
         self.conn.execute(
             """
             INSERT INTO jobs
@@ -360,7 +372,7 @@ class JobDatabase:
                 job_data.get("city"),
                 job_data.get("state"),
                 job_data.get("job_type"),
-                job_data.get("date_posted"),
+                date_posted,
                 job_data.get("description"),
                 job_data.get("min_amount"),
                 job_data.get("max_amount"),
@@ -493,7 +505,7 @@ def _fetch_single_term(term: str, config: dict[str, Any], cache: JobCache | None
             "python-jobspy is not installed. Run: pip install python-jobspy"
         ) from None
 
-    df = scrape_jobs(
+    scrape_kwargs: dict[str, Any] = dict(
         site_name=profile["sites"],
         search_term=term,
         location=profile["location"],
@@ -505,6 +517,12 @@ def _fetch_single_term(term: str, config: dict[str, Any], cache: JobCache | None
         country_indeed="USA",
         verbose=0,
     )
+    if "user_agent" in config:
+        scrape_kwargs["user_agent"] = config["user_agent"]
+    if "proxies" in config:
+        scrape_kwargs["proxies"] = config["proxies"]
+
+    df = scrape_jobs(**scrape_kwargs)
 
     if not df.empty:
         df["search_term"] = term
@@ -628,7 +646,7 @@ EXPORT_COLS = [
     "site", "title", "company", "city", "state", "job_type",
     "date_posted", "match_score_pct", "keyword_count",
     "matched_keywords", "min_amount", "max_amount",
-    "is_remote", "job_url", "description", "search_term", "status",
+    "is_remote", "job_url", "search_term", "status",
 ]
 
 
@@ -649,12 +667,12 @@ def display_results(jobs_df: pd.DataFrame) -> None:
         )
 
     if tabulate is not None:
-        print(tabulate(top10, headers="keys", tablefmt="rounded_outline", showindex=True))
+        print(tabulate(top10, headers="keys", tablefmt="simple", showindex=True))
     else:
         print(top10.to_string())
 
     bins = [0, 25, 50, 75, 100]
-    labels = ["<25%  (Weak)", "25\u201350% (Fair)", "50\u201375% (Good)", "75%+  (Strong)"]
+    labels = ["<25%  (Weak)", "25-50% (Fair)", "50-75% (Good)", "75%+  (Strong)"]
     jobs_df["match_tier"] = pd.cut(jobs_df["match_score_pct"], bins=bins, labels=labels, include_lowest=True)
     dist = jobs_df["match_tier"].value_counts().sort_index()
     print("\n[DIST] Score Distribution:")

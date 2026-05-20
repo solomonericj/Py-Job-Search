@@ -3,6 +3,9 @@ job_matches.csv
 job_cache.json
 job_search.db
 
+# Config with optional credentials (track config.yaml.example instead)
+config.yaml
+
 # Python
 __pycache__/
 *.py[cod]
