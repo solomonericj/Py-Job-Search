@@ -387,6 +387,10 @@ class JobDatabase:
         )
         return "new"
 
+    def clear(self) -> None:
+        self.conn.execute("DELETE FROM jobs;")
+        self.conn.commit()
+
     def close(self) -> None:
         self.conn.commit()
         self.conn.close()
@@ -797,6 +801,8 @@ def main() -> None:
                         help="Debug logging")
     parser.add_argument("--clear-cache", action="store_true",
                         help="Clear job cache and exit")
+    parser.add_argument("--clear-db", action="store_true",
+                        help="Clear job database and exit")
 
     args = parser.parse_args()
     setup_logging(args.verbose)
@@ -807,6 +813,14 @@ def main() -> None:
         cache_path = config.get("cache", {}).get("path", str(DEFAULT_CACHE_PATH))
         JobCache(cache_path).clear()
         print("[OK] Cache cleared.")
+        return
+
+    if args.clear_db:
+        db_path = config.get("database", {}).get("path", "job_search.db")
+        db = JobDatabase(db_path)
+        db.clear()
+        db.close()
+        print("[OK] Database cleared.")
         return
 
     run(config, limit=args.limit, no_cache=args.no_cache,

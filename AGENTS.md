@@ -21,7 +21,7 @@ Scrapes job postings from LinkedIn/Indeed/ZipRecruiter/Glassdoor/Google via `pyt
 - **Scoring** — `score_job()` with weighted tiers, fuzzy matching (`rapidfuzz`|`difflib`), title bonus, salary/remote boosts
 - **Scraper** — `fetch_jobs()` parallelizes search terms via `ThreadPoolExecutor`, `_fetch_single_term()` has `@retry` decorator
 - **Notifications** — `send_email_notification()` via SMTP, password from `SMTP_PASSWORD` env var
-- **CLI** — `argparse` with `--limit`, `--no-cache`, `--no-db`, `--no-notify`, `--verbose`, `--clear-cache`, `--config`
+- **CLI** — `argparse` with `--limit`, `--no-cache`, `--no-db`, `--no-notify`, `--verbose`, `--clear-cache`, `--clear-db`, `--config`
 
 ## Style Conventions
 - Python >= 3.10, uses `str | None` syntax and `from __future__ import annotations`
@@ -35,7 +35,7 @@ Scrapes job postings from LinkedIn/Indeed/ZipRecruiter/Glassdoor/Google via `pyt
 - **Optional**: rapidfuzz (faster fuzzy matching), installed via `pip install -r requirements.txt`
 
 ## Testing
-- No formal test suite. Verify with `python job_match_finder.py --help` and `python job_match_finder.py --clear-cache`
+- No formal test suite. Verify with `python job_match_finder.py --help`, `python job_match_finder.py --clear-cache`, and `python job_match_finder.py --clear-db`
 - Run `python job_match_finder.py --limit 5 --no-cache` for a quick live test
 
 ## Common Tasks
@@ -43,4 +43,5 @@ Scrapes job postings from LinkedIn/Indeed/ZipRecruiter/Glassdoor/Google via `pyt
 - **Quick test**: `python job_match_finder.py --limit 10 --no-cache`
 - **Bypass database**: `python job_match_finder.py --no-db`
 - **View cached data**: check `job_cache.json`, clear with `--clear-cache`
+- **Clear database**: `python job_match_finder.py --clear-db` (resets all scraped jobs, table stays)
 - **Track applications**: edit `status` column in `job_matches.csv` or run SQL directly on `job_search.db`

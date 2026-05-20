@@ -32,6 +32,9 @@ python job_match_finder.py --verbose
 
 # Clear cached results:
 python job_match_finder.py --clear-cache
+
+# Clear the database (jobs table):
+python job_match_finder.py --clear-db
 ```
 
 ### 4. View results
