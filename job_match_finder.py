@@ -26,6 +26,7 @@ import smtplib
 import ssl
 import sys
 import textwrap
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
@@ -139,6 +140,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
 def load_config(config_path: str | None = None) -> dict[str, Any]:
     path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
 
@@ -149,9 +160,7 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
         logger.info("Loading config from %s", path)
         with open(path) as f:
             cfg: dict[str, Any] = yaml.safe_load(f) or {}
-        for key, default_val in DEFAULT_CONFIG.items():
-            cfg.setdefault(key, default_val)
-        return cfg
+        return _deep_merge(DEFAULT_CONFIG, cfg)
 
     logger.info("No config file found -- using built-in defaults.")
     return dict(DEFAULT_CONFIG)
@@ -194,17 +203,25 @@ def retry(
 # Company name normalizer
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_COMPANY_SUFFIXES = (
+    ", inc", ", llc", ", ltd", ", corp", ", incorporated",
+    " inc", " llc", " ltd", " corp", " incorporated",
+    ".inc", ".llc", ".ltd", ".corp",
+)
+
+
 def normalize_company(name: str) -> str:
     if not isinstance(name, str):
         return ""
-    name = name.strip().lower()
-    for suffix in (
-        ", inc", ", llc", ", ltd", ", corp", ", incorporated",
-        " inc", " llc", " ltd", " corp", " incorporated",
-        ".inc", ".llc", ".ltd", ".corp",
-    ):
-        if name.endswith(suffix):
-            name = name[: -len(suffix)].strip()
+    name = name.strip().lower().rstrip(".").strip()
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _COMPANY_SUFFIXES:
+            if name.endswith(suffix):
+                name = name[: -len(suffix)].strip().rstrip(".").strip()
+                changed = True
+                break
     return name
 
 
@@ -216,6 +233,7 @@ class JobCache:
     def __init__(self, cache_path: str = "job_cache.json", ttl_minutes: int = 30):
         self.cache_path = Path(cache_path)
         self.ttl = timedelta(minutes=ttl_minutes)
+        self._lock = threading.Lock()
         self._data: dict[str, Any] = self._load()
         self._dirty = False
 
@@ -250,32 +268,35 @@ class JobCache:
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def get(self, search_term: str, location: str, hours_old: int, sites: list[str]) -> list[dict[str, Any]] | None:
-        key = self._make_key(search_term, location, hours_old, sites)
-        entry = self._data.get(key)
-        if not entry:
-            return None
-        cached_at = datetime.fromisoformat(entry["cached_at"])
-        if datetime.now(timezone.utc) - cached_at > self.ttl:
-            del self._data[key]
-            self._dirty = True
-            self._save()
-            return None
-        logger.debug("Cache hit for '%s'", search_term)
-        return entry["data"]
+        with self._lock:
+            key = self._make_key(search_term, location, hours_old, sites)
+            entry = self._data.get(key)
+            if not entry:
+                return None
+            cached_at = datetime.fromisoformat(entry["cached_at"])
+            if datetime.now(timezone.utc) - cached_at > self.ttl:
+                del self._data[key]
+                self._dirty = True
+                self._save()
+                return None
+            logger.debug("Cache hit for '%s'", search_term)
+            return entry["data"]
 
     def set(self, search_term: str, location: str, hours_old: int, sites: list[str], data: list[dict[str, Any]]) -> None:
-        key = self._make_key(search_term, location, hours_old, sites)
-        self._data[key] = {
-            "cached_at": datetime.now(timezone.utc).isoformat(),
-            "data": data,
-        }
-        self._dirty = True
-        self._save()
+        with self._lock:
+            key = self._make_key(search_term, location, hours_old, sites)
+            self._data[key] = {
+                "cached_at": datetime.now(timezone.utc).isoformat(),
+                "data": data,
+            }
+            self._dirty = True
+            self._save()
 
     def clear(self) -> None:
-        self._data = {}
-        self._dirty = True
-        self._save()
+        with self._lock:
+            self._data = {}
+            self._dirty = True
+            self._save()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -401,7 +422,9 @@ class JobDatabase:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _keyword_match(keyword: str, text: str, fuzzy_enabled: bool, fuzzy_threshold: int) -> bool:
-    if re.search(r"\b" + re.escape(keyword) + r"\b", text, re.IGNORECASE):
+    left  = r"\b" if re.match(r"\w", keyword)   else r"(?<!\w)"
+    right = r"\b" if re.search(r"\w$", keyword) else r"(?!\w)"
+    if re.search(left + re.escape(keyword) + right, text, re.IGNORECASE):
         return True
 
     if fuzzy_enabled:
@@ -473,11 +496,11 @@ def score_job(row: pd.Series, config: dict[str, Any]) -> dict[str, Any]:
         threshold = salary_cfg.get("annual_threshold", 80000)
         boost_pct = salary_cfg.get("boost_pct", 10)
         if max_salary >= threshold:
-            pct = min(100.0, round(pct * (1 + boost_pct / 100), 1))
+            pct = min(100.0, round(pct + boost_pct, 1))
 
     remote_boost_pct = scoring.get("remote_boost_pct", 0)
     if remote_boost_pct and str(row.get("is_remote", "")).lower() in ("true", "yes", "1", "t"):
-        pct = min(100.0, round(pct * (1 + remote_boost_pct / 100), 1))
+        pct = min(100.0, round(pct + remote_boost_pct, 1))
 
     return {
         "match_score_pct": pct,
@@ -577,7 +600,7 @@ def fetch_jobs(
         if dupes:
             logger.info("  Removed %d duplicate(s) by URL", dupes)
 
-    if limit and len(combined) > limit:
+    if limit is not None and len(combined) > limit:
         combined = combined.head(limit)
 
     return combined
@@ -745,38 +768,40 @@ def run(
         db_path = db_cfg.get("path", str(DEFAULT_DB_PATH))
         db = JobDatabase(db_path)
 
-    print("\n[1/3] Fetching job postings ...")
-    jobs_df = fetch_jobs(config, cache, limit)
+    try:
+        print("\n[1/3] Fetching job postings ...")
+        jobs_df = fetch_jobs(config, cache, limit)
 
-    if jobs_df.empty:
-        print("\n[!] No jobs found. Try broadening search terms or increasing hours_old.")
-        return
+        if jobs_df.empty:
+            print("\n[!] No jobs found. Try broadening search terms or increasing hours_old.")
+            return
 
-    print(f"      -> {len(jobs_df)} unique posting(s) retrieved.")
+        print(f"      -> {len(jobs_df)} unique posting(s) retrieved.")
 
-    max_score = _calculate_max_score(profile, config.get("scoring", {}).get("tier_weights", {}))
-    print(f"      Max possible raw score: {max_score} pts")
+        max_score = _calculate_max_score(profile, config.get("scoring", {}).get("tier_weights", {}))
+        print(f"      Max possible raw score: {max_score} pts")
 
-    print("\n[2/3] Scoring postings ...")
-    score_rows = [score_job(row, config) for _, row in jobs_df.iterrows()]
-    scores_df = pd.DataFrame(score_rows)
-    jobs_df = pd.concat([jobs_df.reset_index(drop=True), scores_df], axis=1)
+        print("\n[2/3] Scoring postings ...")
+        score_rows = [score_job(row, config) for _, row in jobs_df.iterrows()]
+        scores_df = pd.DataFrame(score_rows)
+        jobs_df = pd.concat([jobs_df.reset_index(drop=True), scores_df], axis=1)
 
-    jobs_df.sort_values("match_score_pct", ascending=False, inplace=True)
-    jobs_df.reset_index(drop=True, inplace=True)
+        jobs_df.sort_values("match_score_pct", ascending=False, inplace=True)
+        jobs_df.reset_index(drop=True, inplace=True)
 
-    if db is not None:
-        for _, row in jobs_df.iterrows():
-            db.upsert_job(row.to_dict())
+        if db is not None:
+            for _, row in jobs_df.iterrows():
+                db.upsert_job(row.to_dict())
+            db.conn.commit()
 
-    display_results(jobs_df)
-    export_results(jobs_df, db)
+        display_results(jobs_df)
+        export_results(jobs_df, db)
 
-    if not no_notify:
-        send_email_notification(jobs_df, config)
-
-    if db is not None:
-        db.close()
+        if not no_notify:
+            send_email_notification(jobs_df, config)
+    finally:
+        if db is not None:
+            db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
