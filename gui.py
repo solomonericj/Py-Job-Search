@@ -27,6 +27,7 @@ ctk.set_default_color_theme("blue")
 WIN_W, WIN_H = 1280, 820
 SIDEBAR_W = 190
 STATUS_OPTIONS = ["new", "saved", "applied", "rejected", "ignored"]
+_MAX_DB_ROWS = 500
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -288,6 +289,8 @@ class ResultsPage(ctk.CTkFrame):
         self._sort_col = "score"
         self._sort_asc = False
         self._all_rows: list[dict] = []
+        self._filtered_rows: list[dict] = []
+        self._total_db_count: int = 0
         self._build()
 
     def _build(self) -> None:
@@ -374,12 +377,17 @@ class ResultsPage(ctk.CTkFrame):
         db_path = Path(cfg.get("database", {}).get("path", str(jmf.DEFAULT_DB_PATH)))
         if not db_path.exists():
             self._all_rows = []
+            self._total_db_count = 0
+            self._filtered_rows = []
             self._populate([])
             return
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
+        self._total_db_count = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
         rows = conn.execute(
-            "SELECT * FROM jobs ORDER BY match_score_pct DESC").fetchall()
+            "SELECT * FROM jobs ORDER BY match_score_pct DESC LIMIT ?",
+            (_MAX_DB_ROWS,),
+        ).fetchall()
         conn.close()
         self._all_rows = [dict(r) for r in rows]
         self._apply_filters()
@@ -413,6 +421,7 @@ class ResultsPage(ctk.CTkFrame):
         }
         fn = key_map.get(self._sort_col, lambda r: 0)
         filtered.sort(key=fn, reverse=not self._sort_asc)
+        self._filtered_rows = filtered
         self._populate(filtered)
 
     def _populate(self, rows: list[dict]) -> None:
@@ -455,7 +464,10 @@ class ResultsPage(ctk.CTkFrame):
         self._tv.tag_configure("ignored",  foreground="#6b7280")
 
         n = len(rows)
-        self._count_lbl.configure(text=f"{n} job{'s' if n != 1 else ''}")
+        label = f"{n} job{'s' if n != 1 else ''}"
+        if self._total_db_count > _MAX_DB_ROWS:
+            label += f"  (showing top {_MAX_DB_ROWS} of {self._total_db_count} in DB)"
+        self._count_lbl.configure(text=label)
 
     def _sort_by(self, col: str) -> None:
         self._sort_asc = not self._sort_asc if self._sort_col == col else (col != "score")
@@ -484,11 +496,12 @@ class ResultsPage(ctk.CTkFrame):
     def _export_csv(self) -> None:
         try:
             import pandas as pd
-            if not self._all_rows:
+            rows = self._filtered_rows or self._all_rows
+            if not rows:
                 messagebox.showinfo("Export", "No data to export.")
                 return
-            pd.DataFrame(self._all_rows).to_csv("job_matches.csv", index=False)
-            messagebox.showinfo("Exported", "Saved to job_matches.csv")
+            pd.DataFrame(rows).to_csv("job_matches.csv", index=False)
+            messagebox.showinfo("Exported", f"Saved {len(rows)} job(s) to job_matches.csv")
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
 
