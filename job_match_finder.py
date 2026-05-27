@@ -192,7 +192,9 @@ def retry(
                         )
                         time.sleep(delay)
             logger.error("All %d retries failed for %s: %s", max_retries, func.__name__, last_exc)
-            raise last_exc  # noqa: TRY201
+            if last_exc is not None:
+                raise last_exc  # noqa: TRY201
+            raise RuntimeError(f"No retry attempts configured for {func.__name__}")
 
         return wrapper
 
@@ -306,6 +308,7 @@ class JobCache:
 class JobDatabase:
     def __init__(self, db_path: str = "job_search.db"):
         self.db_path = db_path
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -620,6 +623,14 @@ def send_email_notification(jobs_df: pd.DataFrame, config: dict[str, Any]) -> No
     if not sender or not recipient:
         logger.warning("Email enabled but sender/recipient not configured.")
         return
+    if "@" not in sender or "@" not in recipient:
+        logger.warning("Invalid sender or recipient email address -- skipping.")
+        return
+
+    smtp_port = email_cfg.get("smtp_port", 587)
+    if not isinstance(smtp_port, int) or not (1 <= smtp_port <= 65535):
+        logger.warning("Invalid SMTP port %r -- skipping email.", smtp_port)
+        return
 
     min_score = email_cfg.get("min_score", 70)
     high_scorers = jobs_df[jobs_df["match_score_pct"] >= min_score]
@@ -650,7 +661,8 @@ def send_email_notification(jobs_df: pd.DataFrame, config: dict[str, Any]) -> No
         ctx = ssl.create_default_context()
         with smtplib.SMTP(
             email_cfg.get("smtp_server", "smtp.gmail.com"),
-            email_cfg.get("smtp_port", 587),
+            smtp_port,
+            timeout=30,
         ) as server:
             server.starttls(context=ctx)
             server.login(sender, password)
