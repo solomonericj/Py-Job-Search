@@ -192,7 +192,9 @@ def retry(
                         )
                         time.sleep(delay)
             logger.error("All %d retries failed for %s: %s", max_retries, func.__name__, last_exc)
-            raise last_exc  # noqa: TRY201
+            if last_exc is not None:
+                raise last_exc  # noqa: TRY201
+            raise RuntimeError(f"No retry attempts configured for {func.__name__}")
 
         return wrapper
 
@@ -651,6 +653,7 @@ def send_email_notification(jobs_df: pd.DataFrame, config: dict[str, Any]) -> No
         with smtplib.SMTP(
             email_cfg.get("smtp_server", "smtp.gmail.com"),
             email_cfg.get("smtp_port", 587),
+            timeout=30,
         ) as server:
             server.starttls(context=ctx)
             server.login(sender, password)

@@ -250,7 +250,9 @@ class DetailPanel(ctk.CTkFrame):
         status = self._status_var.get()
         notes  = self._notes.get("1.0", "end").strip()
         try:
-            conn = sqlite3.connect(str(jmf.DEFAULT_DB_PATH))
+            cfg = jmf.load_config()
+            db_path = cfg.get("database", {}).get("path", str(jmf.DEFAULT_DB_PATH))
+            conn = sqlite3.connect(db_path)
             conn.execute("UPDATE jobs SET status=?, notes=? WHERE job_url=?",
                          (status, notes, self._url))
             conn.commit()
@@ -368,7 +370,8 @@ class ResultsPage(ctk.CTkFrame):
     # ── Data ──────────────────────────────────────────────────────────────────
 
     def refresh(self) -> None:
-        db_path = Path(jmf.DEFAULT_DB_PATH)
+        cfg = jmf.load_config()
+        db_path = Path(cfg.get("database", {}).get("path", str(jmf.DEFAULT_DB_PATH)))
         if not db_path.exists():
             self._all_rows = []
             self._populate([])
