@@ -18,6 +18,14 @@ pip install rapidfuzz
 Copy `config.yaml.example` to `config.yaml` and edit your location, search terms, and skills. `config.yaml` is gitignored to prevent credential leaks.
 
 ### 3. Run
+
+**GUI (recommended):**
+```bash
+python gui.py
+```
+A desktop app (CustomTkinter) with three pages: **Search** (run scrapes, watch live logs), **Results** (sortable/filterable table; click a job to set status, add notes, or open it in the browser), and **Config** (edit `config.yaml` from a form — no YAML editing required).
+
+**CLI:**
 ```bash
 python job_match_finder.py
 
@@ -38,7 +46,8 @@ python job_match_finder.py --clear-db
 ```
 
 ### 4. View results
-- Top 10 matches printed to the terminal with a score distribution histogram.
+- **GUI:** the Results page reads `job_search.db` directly — sort by any column, filter by text/status/min-score, and update status + notes inline.
+- **CLI:** top 10 matches printed to the terminal with a score distribution histogram.
 - All results exported to **`job_matches.csv`** (edit the `status` column to track applications).
 - Jobs persisted in **`job_search.db`** (SQLite) — status survives across runs.
 
@@ -48,6 +57,7 @@ python job_match_finder.py --clear-db
 
 | Feature | Description |
 |---------|-------------|
+| **Desktop GUI** | `gui.py` (CustomTkinter) — run searches, browse/filter results, edit config, and track status + notes without the command line |
 | **External config** | `config.yaml` — edit profile without touching code |
 | **Multi-site scraping** | LinkedIn, Indeed, Google (Glassdoor/ZipRecruiter blocked server-side) |
 | **Tiered scoring** | Skills grouped into 3 tiers with configurable weights (3 / 2 / 1 pts) |
@@ -58,7 +68,7 @@ python job_match_finder.py --clear-db
 | **Parallel fetching** | Search terms fetched concurrently via `ThreadPoolExecutor` (max 4 workers) |
 | **Caching** | Results cached for 30 min (configurable); re-runs are instant |
 | **Retry logic** | Automatic retry with exponential backoff on network errors |
-| **SQLite database** | Tracks status (`new` → `saved` → `applied` → `rejected`), preserves across runs |
+| **SQLite database** | Tracks status (`new` / `saved` / `applied` / `rejected` / `ignored`) and free-text `notes`, preserved across runs |
 | **Email notifications** | Get alerted when high-scoring jobs appear |
 | **CLI flags** | `--limit`, `--no-cache`, `--no-db`, `--no-notify`, `--verbose`, `--clear-cache`, `--config` |
 | **Company normalizer** | Deduplicates "Acme Inc." and "Acme" |
@@ -128,9 +138,9 @@ database:
 Site, title, company, city, state, job type, date posted, match score, keyword count, matched keywords, salary range, remote flag, URL, search term, and **`status`** (new / saved / applied / rejected).
 
 ### `job_search.db`
-SQLite database with a `jobs` table. Edit status directly:
+SQLite database with a `jobs` table holding each posting plus a `status` (`new` / `saved` / `applied` / `rejected` / `ignored`) and free-text `notes`. Update these in the GUI's Results page, or edit directly:
 ```sql
-UPDATE jobs SET status = 'applied' WHERE job_url = '...';
+UPDATE jobs SET status = 'applied', notes = 'phone screen 6/1' WHERE job_url = '...';
 ```
 
 ### `job_cache.json`
