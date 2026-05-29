@@ -339,8 +339,19 @@ class JobDatabase:
                 last_seen       TEXT,
                 notes           TEXT DEFAULT ''
             );
-            CREATE INDEX IF NOT EXISTS idx_jobs_url  ON jobs(job_url);
+            CREATE INDEX IF NOT EXISTS idx_jobs_url    ON jobs(job_url);
             CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+            CREATE TABLE IF NOT EXISTS status_history (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_url    TEXT NOT NULL,
+                status     TEXT NOT NULL,
+                changed_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sh_url ON status_history(job_url);
+            CREATE TABLE IF NOT EXISTS run_log (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL
+            );
         """)
         self.conn.commit()
 
@@ -409,7 +420,79 @@ class JobDatabase:
                 now,
             ),
         )
+        self.conn.execute(
+            "INSERT INTO status_history (job_url, status, changed_at) VALUES (?, 'new', ?)",
+            (url, now),
+        )
         return "new"
+
+    def record_run(self) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute("INSERT INTO run_log (started_at) VALUES (?)", (now,))
+        self.conn.commit()
+
+    def get_latest_run_at(self) -> str | None:
+        row = self.conn.execute(
+            "SELECT started_at FROM run_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return row[0] if row else None
+
+    def update_job_status(self, job_url: str, status: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute("UPDATE jobs SET status=? WHERE job_url=?", (status, job_url))
+        self.conn.execute(
+            "INSERT INTO status_history (job_url, status, changed_at) VALUES (?, ?, ?)",
+            (job_url, status, now),
+        )
+        self.conn.commit()
+
+    def get_status_history(self, job_url: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT status, changed_at FROM status_history "
+            "WHERE job_url=? ORDER BY changed_at",
+            (job_url,),
+        ).fetchall()
+        return [{"status": r[0], "changed_at": r[1]} for r in rows]
+
+    def get_dashboard_stats(self) -> dict:
+        score_dist: dict[str, int] = {}
+        for label, lo, hi in [("<25", 0, 25), ("25-50", 25, 50), ("50-75", 50, 75), ("75+", 75, 101)]:
+            count = self.conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE match_score_pct >= ? AND match_score_pct < ?",
+                (lo, hi),
+            ).fetchone()[0]
+            score_dist[label] = count
+
+        activity = self.conn.execute(
+            """SELECT substr(first_seen, 1, 10) AS day, COUNT(*) AS cnt
+               FROM jobs WHERE first_seen >= datetime('now', '-30 days')
+               GROUP BY day ORDER BY day"""
+        ).fetchall()
+
+        applications = self.conn.execute(
+            """SELECT substr(changed_at, 1, 10) AS day, COUNT(*) AS cnt
+               FROM status_history WHERE status = 'applied'
+               AND changed_at >= datetime('now', '-30 days')
+               GROUP BY day ORDER BY day"""
+        ).fetchall()
+
+        top_companies = self.conn.execute(
+            """SELECT company, COUNT(*) AS cnt FROM jobs
+               WHERE company IS NOT NULL AND company != ''
+               GROUP BY company ORDER BY cnt DESC LIMIT 10"""
+        ).fetchall()
+
+        status_counts = self.conn.execute(
+            "SELECT status, COUNT(*) AS cnt FROM jobs GROUP BY status"
+        ).fetchall()
+
+        return {
+            "score_dist": score_dist,
+            "activity": [(r[0], r[1]) for r in activity],
+            "applications": [(r[0], r[1]) for r in applications],
+            "top_companies": [(r[0], r[1]) for r in top_companies],
+            "status_counts": {r[0]: r[1] for r in status_counts},
+        }
 
     def clear(self) -> None:
         self.conn.execute("DELETE FROM jobs;")
@@ -781,6 +864,8 @@ def run(
         db = JobDatabase(db_path)
 
     try:
+        if db is not None:
+            db.record_run()
         print("\n[1/3] Fetching job postings ...")
         jobs_df = fetch_jobs(config, cache, limit)
 
